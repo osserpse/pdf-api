@@ -1,0 +1,85 @@
+# ==============================================
+# Cursor Rules for PDF API (FastAPI + Payroll Extractor)
+# ==============================================
+
+project:
+  name: "PDF API"
+  description: "FastAPI interface for Payroll Extractor"
+  author: "Oa Berg"
+  language: "Python"
+  env: "venv"
+
+rules:
+  - Always keep compatibility with `payroll-extractor`.
+  - API endpoints must call `extract_payroll(pdf_path)` from `extractor/extract_payroll.py`.
+  - Use FastAPI + Uvicorn as the runtime stack.
+  - Follow PEP8 and use Python type hints.
+  - CORS must allow localhost (3000 and 127.0.0.1).
+  - Temporary files must always be deleted after use.
+  - Prefer `JSONResponse` for returning data.
+  - All errors should return `{ "status": "error", "error_message": "..."}`
+  - Use `tempfile` for file handling and never write to project folders.
+  - Ensure graceful failure and useful logs in `outbox/api_log.txt`.
+
+style:
+  code:
+    indent: 4
+    line_length: 100
+    comments: concise and instructive
+    docstrings: true
+  commits:
+    message_format: "feat(scope): message"
+    examples:
+      - "feat(api): add sickleave extractor endpoint"
+      - "fix(cors): correct allowed origins for dev"
+
+dependencies:
+  python:
+    - fastapi
+    - uvicorn
+    - pdfplumber
+    - python-multipart
+    - watchdog
+
+---
+
+## 🧩 AI Behavior Guidelines
+
+- Understand and maintain the relationship between:
+  - `extract_payroll(pdf_path)` ← (Python function in payroll-extractor)
+  - `/extract/payroll` ← (FastAPI endpoint)
+  - `handlePdfExtraction()` ← (React function calling the API)
+- When asked to modify any component, ensure the other layers continue to work with it.
+- Never rewrite extraction logic (pdfplumber/regex) unless explicitly requested.
+- Prioritize system integrity and JSON schema consistency over stylistic changes.
+- Always suggest logging improvements or error clarity if relevant.
+- Propose modularization (e.g., `utils/`, `schemas/`) only if it improves testability.
+
+---
+
+## 🧭 Recommended Workspace Layout
+```
+pdf-api/
+├── api/
+│   └── main.py # FastAPI application
+├── requirements.txt # Python dependencies
+├── venv/ # Virtual environment
+└── .cursorrules # Workspace rules (this file)
+```
+
+---
+
+## 🧪 Development Flow
+1. Developer uploads PDF via React frontend → handled via drag & drop.
+2. React sends it to `/extract/payroll` (FastAPI).
+3. FastAPI saves it temporarily → calls `extract_payroll(pdf_path)`.
+4. Python extractor parses data and returns structured JSON.
+5. JSON is returned to React → displayed and used for cost calculations.
+
+---
+
+## ✅ Key Design Goals
+- Maintain **data fidelity** between Crona Lön PDF → JSON → UI model.
+- Enable local, offline dev setup.
+- Support both *real-time upload via API* and *batch extraction via watcher*.
+- Keep architecture modular: Extractors can evolve independently from API and frontend.

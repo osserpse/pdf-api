@@ -1,252 +1,256 @@
-# 📡 PDF API
+# PDF API - FastAPI Interface for Payroll Extractor
 
-> Ett lättviktigt REST API för att extrahera data ur PDF-filer med hjälp av `payroll-extractor`.
-> Byggt med **FastAPI** och **Uvicorn**, designat för att integrera med React/Next.js.
+A FastAPI-based REST API that provides endpoints for extracting structured payroll data from Crona Lön PDF files.
 
----
+## 🎯 Purpose
 
-## 🚀 Översikt
+This API serves as a bridge between the React/Next.js frontend (`novum-sickcalc`) and the Python-based PDF extraction engine (`payroll-extractor`). It handles PDF uploads, processes them through the extraction pipeline, and returns structured JSON data.
 
-Detta projekt fungerar som ett gränssnitt mellan frontend och de Python-baserade extraktionsmodulerna.
-
-### Syfte
-
-* Ta emot PDF-filer via POST-request
-* Anropa `extract_payroll()` från `payroll-extractor`
-* Returnera strukturerad JSON som svar
-
-Det är en del av ett större system:
+## 🏗️ Architecture
 
 ```
-React (Next.js) → PDF API (FastAPI) → Payroll Extractor (Python/pdfplumber)
+React Frontend (localhost:3000)
+    ↓ HTTP POST /extract/payroll
+PDF API (localhost:8000)
+    ↓ extract_payroll(pdf_path)
+Payroll Extractor (../payroll-extractor/)
+    ↓ Structured JSON
+React Frontend (displays results)
 ```
 
----
+## 🚀 Quick Start
 
-## 📁 Struktur
+### Prerequisites
+- Python 3.9+
+- Virtual environment support
+- Access to `../payroll-extractor/` directory
 
-```
-pdf-api/
-├── api/
-│   └── main.py              ← huvudfilen för FastAPI
-├── venv/                    ← virtuell miljö (rekommenderad)
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
+### Installation & Setup
 
----
+1. **Navigate to the pdf-api directory:**
+   ```bash
+   cd pdf-api
+   ```
 
-## ⚙️ Installation
+2. **Run the startup script:**
+   ```bash
+   ./start.sh
+   ```
 
-```bash
-# Klona repo
-git clone https://github.com/<ditt-orgnamn>/pdf-api.git
-cd pdf-api
+   Or manually:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   python api/main.py
+   ```
 
-# Skapa virtuell miljö
-python3 -m venv venv
-source venv/bin/activate
+3. **Verify the server is running:**
+   ```bash
+   curl http://localhost:8000/health
+   ```
 
-# Installera beroenden
-pip install fastapi uvicorn pdfplumber
-```
+## 📚 API Endpoints
 
-Om du även ska köra extraktionen lokalt:
+### Health Check
+- **GET** `/health`
+- Returns server status and timestamp
 
-```bash
-pip install watchdog
-```
+### Extract Payroll Data
+- **POST** `/extract/payroll`
+- **Content-Type:** `multipart/form-data`
+- **Body:** PDF file upload
+- **Returns:** Structured JSON with payroll data
 
----
+### API Documentation
+- **GET** `/docs` - Interactive Swagger UI
+- **GET** `/redoc` - ReDoc documentation
+- **GET** `/openapi.json` - OpenAPI specification
 
-## 🧩 Körning
+## 📊 Response Format
 
-Starta servern:
-
-```bash
-cd ~/Projects/pdf-api
-source venv/bin/activate
-uvicorn api.main:app --reload --port 8000
-```
-
-Servern körs då på:
-
-```
-http://127.0.0.1:8000
-```
-
----
-
-## 🔌 API-endpoints
-
-### POST `/extract/payroll`
-
-Tar emot en PDF-fil och returnerar extraherad lönedata i JSON-format.
-
-**Exempel (curl):**
-
-```bash
-curl -X POST -F "file=@Lönebesked_203001_2025_5.pdf" http://127.0.0.1:8000/extract/payroll
-```
-
-**Svarsexempel:**
-
+### Successful Extraction
 ```json
 {
   "203001": {
     "anstallningsnr": "203001",
-    "namn": "Anders Andersson",
-    "loneposter": [...],
-    "lonebesked": {...},
+    "namn": "Hanad Yusuf Sheikh",
+    "loneperiod": "2025.K.05",
+    "utbetalningsdag": "2025-05-23",
+    "intjanandeperiod": "2025-04-01 - 2025-04-30",
+    "rapporteringsperiod": "2025-04-01 - 2025-04-30",
+    "adress": "Björkhyttevägen 63 C, lgh 1001",
+    "ort": "71133 LINDESBERG",
+    "loneposter": [
+      {
+        "loneart": "111",
+        "benamning": "Timlön exkl. sem.ersättning [AA]",
+        "antal": "70,83 tim",
+        "belopp": "169,15",
+        "summa": "11 980,89",
+        "period": ""
+      }
+    ],
+    "notering": "Uppdaterad efter vi fick sjukintyg 250520",
+    "lonebesked": {
+      "tabellskattegrund": "16 159,10",
+      "engangsskattegrund": "0,00",
+      "arbetsgivaravgift": "5 077,19",
+      "bruttolon": "16 159,10",
+      "tabellskatt": "-2 634,00",
+      "engangs_frivillig_skatt": "0,00",
+      "skattefritt": "0,00",
+      "att_utbetala": "13 525,00"
+    },
     "status": "ok"
   }
 }
 ```
 
----
-
-## 🧪 Testa API:t
-
-### Test via **curl**
-
-Kör detta kommando från projektroten:
-
-```bash
-curl -X POST \
-  -H "accept: application/json" \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@/Users/oa/Projects/payroll-extractor/inbox/Lönebesked_203001_2025_5.pdf" \
-  http://127.0.0.1:8000/extract/payroll
-```
-
-Om allt fungerar får du ett svar i terminalen som börjar med:
-
+### Error Response
 ```json
 {
-  "203001": {
-    "anstallningsnr": "203001",
-    ...
-  }
+  "status": "error",
+  "error_message": "File must be a PDF",
+  "filename": "document.txt"
 }
 ```
 
-### Test via **Postman**
+## 🔧 Configuration
 
-1. Öppna Postman och skapa en ny **POST request** till:
+### CORS Settings
+The API is configured to accept requests from:
+- `http://localhost:3000` (React dev server)
+- `http://127.0.0.1:3000`
+- `http://localhost:3001` (alternative port)
+- `http://127.0.0.1:3001`
 
-   ```
-   http://127.0.0.1:8000/extract/payroll
-   ```
-2. Gå till fliken **Body → form-data**.
-3. Lägg till ett fält:
+### Logging
+- **Console:** Structured logging with timestamps
+- **File:** API requests logged to `../payroll-extractor/outbox/api_log.txt`
 
-   * **Key:** `file`
-   * **Type:** File
-   * **Value:** välj en PDF-fil (t.ex. Lönebesked_203001_2025_5.pdf)
-4. Tryck **Send**.
+### Temporary Files
+- All uploaded PDFs are processed in temporary files
+- Files are automatically cleaned up after processing
+- No permanent storage in the API directory
 
-Om allt är korrekt konfigurerat får du JSON-svaret direkt i Postman.
+## 🧪 Testing
 
----
-
-## 🧱 Arkitektur
-
-FastAPI-appen laddar extraktorn dynamiskt:
-
-```python
-# api/main.py
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
-from extractor.extract_payroll import extract_payroll
-
-app = FastAPI()
-
-@app.post("/extract/payroll")
-async def extract_payroll_endpoint(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
-
-    result = extract_payroll(tmp_path)
-    os.remove(tmp_path)
-    return JSONResponse(result)
+### Test with Sample PDF
+```bash
+curl -X POST "http://localhost:8000/extract/payroll" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@../payroll-extractor/Lönebesked_203001_2025_5.pdf"
 ```
 
-**CORS** är aktiverat för utvecklingsmiljöer:
-
-```python
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
-]
+### Health Check
+```bash
+curl http://localhost:8000/health
 ```
 
----
+## 🛠️ Development
 
-## 🌐 Integration med frontend
+### Project Structure
+```
+pdf-api/
+├── api/
+│   └── main.py          # FastAPI application
+├── venv/                # Virtual environment
+├── requirements.txt     # Python dependencies
+├── start.sh            # Startup script
+├── .cursorrules        # Cursor AI rules
+└── README.md           # This file
+```
 
-React-appen anropar API:t via `fetch()`:
+### Dependencies
+- **FastAPI** - Web framework
+- **Uvicorn** - ASGI server
+- **python-multipart** - File upload support
+- **pdfplumber** - PDF processing (via payroll-extractor)
+
+### Adding New Endpoints
+
+1. **Import required modules:**
+   ```python
+   from fastapi import FastAPI, File, UploadFile, HTTPException
+   from fastapi.responses import JSONResponse
+   ```
+
+2. **Create endpoint function:**
+   ```python
+   @app.post("/extract/sickleave")
+   async def extract_sickleave_endpoint(file: UploadFile = File(...)):
+       # Implementation here
+       pass
+   ```
+
+3. **Follow error handling pattern:**
+   ```python
+   try:
+       # Processing logic
+       return JSONResponse(result)
+   except Exception as e:
+       return JSONResponse(
+           {"status": "error", "error_message": str(e)},
+           status_code=500
+       )
+   ```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+1. **ModuleNotFoundError: No module named 'fastapi'**
+   - Solution: Activate virtual environment: `source venv/bin/activate`
+
+2. **ImportError: No module named 'extractor'**
+   - Solution: Ensure `../payroll-extractor/` directory exists and contains `extractor/` module
+
+3. **CORS errors in browser**
+   - Solution: Check that frontend URL is in the allowed origins list
+
+4. **Server won't start**
+   - Solution: Check port 8000 is available: `lsof -i :8000`
+
+### Logs
+- **API Log:** `../payroll-extractor/outbox/api_log.txt`
+- **Console:** Real-time server logs
+- **Extraction Log:** `../payroll-extractor/outbox/extract_log.txt`
+
+## 📝 Integration Notes
+
+### With React Frontend
+The API is designed to work seamlessly with the `novum-sickcalc` React application:
 
 ```javascript
+// Example frontend usage
 const formData = new FormData();
-formData.append('file', selectedFile);
+formData.append('file', pdfFile);
 
-const response = await fetch('http://127.0.0.1:8000/extract/payroll', {
+const response = await fetch('http://localhost:8000/extract/payroll', {
   method: 'POST',
   body: formData,
 });
 
 const data = await response.json();
-console.log('Extracted payroll data:', data);
 ```
 
----
+### With Payroll Extractor
+The API directly imports and calls the `extract_payroll()` function from the payroll-extractor module, ensuring data consistency between batch processing and API usage.
 
-## 🧩 Relaterade moduler
+## 🚀 Production Deployment
 
-| Modul                        | Syfte                                    | Output                 |
-| ---------------------------- | ---------------------------------------- | ---------------------- |
-| **Payroll Extractor**        | Extraherar PDF-lönebesked till JSON      | `payrolls.json`        |
-| **Sick Leave Extractor**     | Extraherar sjuklistor (PDF/CSV) till CSV | `sickleave_YYYYMM.csv` |
-| **PDF API (detta repo)**     | REST-gränssnitt mot extraktorer          | JSON-response          |
-| **Frontend (Next.js/React)** | UI för uppladdning och analys            | Visar resultat         |
+For production deployment, consider:
+- Using a production ASGI server (Gunicorn + Uvicorn workers)
+- Implementing proper authentication/authorization
+- Adding rate limiting
+- Setting up proper logging infrastructure
+- Using environment variables for configuration
 
----
+## 📄 License
 
-## 🧰 Felsökning
+MIT License - see project root for details.
 
-**Fel:** `ModuleNotFoundError: No module named 'extractor'`
-➡️ Lägg till sökvägen till `payroll-extractor` i början av `api/main.py`:
+## 👨‍💻 Author
 
-```python
-import sys, os
-base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-payroll_extractor_path = os.path.join(base_dir, "..", "payroll-extractor")
-sys.path.append(os.path.abspath(payroll_extractor_path))
-```
-
-**Fel:** `CORS policy blocked`
-➡️ Kontrollera att CORS-listan innehåller frontendens URL (`localhost:3000`).
-
----
-
-## 🧩 Framtida utveckling
-
-* ✅ Lägg till endpoint för **Sick Leave Extractor** (`/extract/sickleave`)
-* 📦 Lägg till stöd för multipla PDF-uppladdningar
-* 🧮 Integrera direkt med kostnadskalkylering i frontend
-
----
-
-## 📜 Licens
-
-MIT License © 2025 Happy User AB / Oa Berg
-
----
-
-## 💬 Kontakt
-
-Utvecklad av **Oa Berg**
-📧 [oa@happyuser.se](mailto:oa@happyuser.se)
-
+**Oa Berg** - Project maintainer and developer
