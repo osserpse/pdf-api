@@ -51,3 +51,6 @@ echo -e "${YELLOW}Press Ctrl+C to stop the server${NC}"
 echo ""
 
 python api/main.py
+
+
+

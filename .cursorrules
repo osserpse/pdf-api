@@ -83,3 +83,6 @@ pdf-api/
 - Enable local, offline dev setup.
 - Support both *real-time upload via API* and *batch extraction via watcher*.
 - Keep architecture modular: Extractors can evolve independently from API and frontend.
+
+
+
