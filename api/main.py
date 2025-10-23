@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(payroll_extractor_path))
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 import tempfile, os
-from extractor.core_payroll import extract_payroll  # din befintliga funktion
+from extractor.extract_payroll import extract_payroll  # din befintliga funktion
 
 app = FastAPI()
 

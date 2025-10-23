@@ -1,2 +1,72 @@
+# =========================================
+# Git Ignore - pdf-api
+# =========================================
+
+# Python cache och bytecode
+api/__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtuell miljö
+venv/
+env/
+.venv/
+
+# macOS-systemfiler
 .DS_Store
-venv
+.AppleDouble
+.LSOverride
+
+# VSCode / IDE / Cursor
+.vscode/
+.idea/
+*.code-workspace
+
+# Miljöfiler och hemligheter
+.env
+.env.local
+*.env
+secrets.json
+
+# Temporära filer
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Loggar
+*.log
+logs/
+outbox/
+inbox/
+tmp/
+temp/
+*.pid
+
+# PDF-filer (uppladdningar och test)
+*.pdf
+
+# FastAPI / Uvicorn tillfälliga filer
+*.sqlite
+*.db
+uvicorn.log
+
+# Pytest / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Paketfiler
+*.egg-info/
+dist/
+build/
+
+# Node (om React-del ligger i samma repo)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# JetBrains / Editor cache
+.idea/
+*.iml
