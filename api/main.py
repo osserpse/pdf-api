@@ -138,7 +138,9 @@ async def extract_payroll_endpoint(file: UploadFile = File(...), mode: str = For
         if mode == "multi":
             # Phase 2: Multi-employee PDF processing
             # Split PDF into individual payroll blocks and save raw data
-            payrolls = split_payrolls_in_pdf(tmp_path)
+            result = split_payrolls_in_pdf(tmp_path)
+            payrolls = result["payrolls"]
+            pdf_path = result["pdf_path"]
 
             # Create the raw data directory structure
             from datetime import datetime
@@ -147,10 +149,14 @@ async def extract_payroll_endpoint(file: UploadFile = File(...), mode: str = For
             raw_dir = os.path.join(payroll_extractor_path, "outbox", "raw", month_dir)
             os.makedirs(raw_dir, exist_ok=True)
 
-            # Save raw payroll data
+            # Save raw payroll data with PDF path metadata
             raw_file = os.path.join(raw_dir, "payroll_raw.json")
+            data_to_save = {
+                "pdf_path": pdf_path,
+                "payrolls": payrolls
+            }
             with open(raw_file, "w", encoding="utf-8") as f:
-                json.dump(payrolls, f, ensure_ascii=False, indent=2)
+                json.dump(data_to_save, f, ensure_ascii=False, indent=2)
 
             logger.info(f"Created payroll_raw.json with {len(payrolls)} employees")
 
