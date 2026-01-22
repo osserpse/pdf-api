@@ -18,6 +18,7 @@ import tempfile
 import shutil
 import logging
 import json
+import re
 import zipfile
 import uuid
 from datetime import datetime
@@ -30,6 +31,7 @@ sys.path.append(os.path.abspath(payroll_extractor_path))
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict, Any
 
 # Importer från extractor-modulerna
 from extractor.extract_payroll import extract_payroll
@@ -96,6 +98,22 @@ def log_api_request(endpoint: str, filename: str, status: str, error_msg: str = 
             f.write(log_entry)
     except Exception as e:
         logger.warning(f"Failed to write to API log: {e}")
+
+
+def extract_reporting_period_from_raw(payrolls: Dict[str, Any]) -> str:
+    """
+    Extract 'YYYY-MM-DD - YYYY-MM-DD' from the first payroll text that contains it.
+    """
+    if not isinstance(payrolls, dict):
+        return ""
+    pattern = r"Rapporteringsperiod\s*:\s*(\d{4}-\d{2}-\d{2})\s*-\s*(\d{4}-\d{2}-\d{2})"
+    for value in payrolls.values():
+        if not isinstance(value, str):
+            continue
+        match = re.search(pattern, value)
+        if match:
+            return f"{match.group(1)} - {match.group(2)}"
+    return ""
 
 # ---------------------------------------------------------
 # API-endpoints
@@ -301,10 +319,23 @@ async def export_zip_package(
         if not pdf_path or not os.path.exists(pdf_path):
             raise HTTPException(status_code=404, detail="payroll PDF not found for raw_file")
 
-        zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips")
+        payrolls_data = raw_data.get("payrolls") if isinstance(raw_data, dict) else None
+        reporting_period = extract_reporting_period_from_raw(payrolls_data)
+        if reporting_period:
+            year_month = reporting_period.split(" - ")[0][:7]
+        else:
+            year_month = datetime.now().strftime("%Y-%m")
+        year, month = year_month.split("-")
+
+        zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips", year, month)
         os.makedirs(zip_dir, exist_ok=True)
         zip_id = uuid.uuid4().hex
-        zip_path = os.path.join(zip_dir, f"zip_{zip_id}.zip")
+        calculation_name = calculation_pdf.filename or "berakning.pdf"
+        if calculation_name.lower().endswith(".pdf"):
+            zip_filename = calculation_name[:-4] + ".zip"
+        else:
+            zip_filename = f"{calculation_name}.zip"
+        zip_path = os.path.join(zip_dir, zip_filename)
         work_dir = os.path.join(zip_dir, f"zip_{zip_id}_work")
         os.makedirs(work_dir, exist_ok=True)
 
@@ -321,7 +352,6 @@ async def export_zip_package(
         if not time_bytes:
             raise HTTPException(status_code=400, detail="time_report_pdf is empty")
 
-        calculation_name = calculation_pdf.filename or "berakning.pdf"
         time_report_name = time_report_pdf.filename or "tidrapport.pdf"
 
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -335,12 +365,13 @@ async def export_zip_package(
         except Exception as e:
             logger.warning(f"Failed to clean zip work dir {work_dir}: {e}")
 
-        download_url = str(request.base_url) + f"download/zip/{zip_id}"
+        download_url = str(request.base_url) + f"download/zip/{year}/{month}/{zip_filename}"
         return JSONResponse({
             "status": "ok",
             "zip_id": zip_id,
             "download_url": download_url,
-            "missing_employee_ids": missing_employee_ids
+            "missing_employee_ids": missing_employee_ids,
+            "reporting_period": reporting_period or None
         })
     except HTTPException:
         raise
@@ -353,13 +384,26 @@ async def export_zip_package(
         )
 
 
-@app.get("/download/zip/{zip_id}")
-async def download_zip(zip_id: str):
-    zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips")
-    zip_path = os.path.join(zip_dir, f"zip_{zip_id}.zip")
+@app.get("/download/zip/{year}/{month}/{filename}")
+async def download_zip_by_path(year: str, month: str, filename: str):
+    zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips", year, month)
+    zip_path = os.path.join(zip_dir, filename)
     if not os.path.exists(zip_path):
         raise HTTPException(status_code=404, detail="zip not found")
     return FileResponse(zip_path, media_type="application/zip", filename=os.path.basename(zip_path))
+
+
+@app.get("/download/zip/{zip_id}")
+async def download_zip(zip_id: str):
+    zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips")
+    if not os.path.exists(zip_dir):
+        raise HTTPException(status_code=404, detail="zip not found")
+    for root, _, files in os.walk(zip_dir):
+        for file in files:
+            if file == f"zip_{zip_id}.zip":
+                zip_path = os.path.join(root, file)
+                return FileResponse(zip_path, media_type="application/zip", filename=file)
+    raise HTTPException(status_code=404, detail="zip not found")
 
 
 # ---------------------------------------------------------
