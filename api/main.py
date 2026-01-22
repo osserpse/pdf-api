@@ -39,6 +39,7 @@ from typing import Dict, Any
 from extractor.extract_payroll import extract_payroll
 from extractor.extract_payroll_from_list import process_sjuklista
 from extractor.extract_payroll_prepare import split_payrolls_in_pdf, extract_employee_pdfs
+import pdfplumber
 
 # ---------------------------------------------------------
 # Logging och app-inställningar
@@ -115,6 +116,26 @@ def extract_reporting_period_from_raw(payrolls: Dict[str, Any]) -> str:
         match = re.search(pattern, value)
         if match:
             return f"{match.group(1)} - {match.group(2)}"
+    return ""
+
+
+def extract_uppdragsgivare_from_time_report_pdf(pdf_path: str) -> str:
+    """
+    Extract 'Uppdragsgivare:' from the last page; fallback to all pages.
+    """
+    pattern = re.compile(r"Uppdragsgivare\s*:\s*([A-Za-zÅÄÖåäö\s\-]+)", re.IGNORECASE)
+    with pdfplumber.open(pdf_path) as pdf:
+        if len(pdf.pages) == 0:
+            return ""
+        last_text = pdf.pages[-1].extract_text() or ""
+        match = pattern.search(last_text)
+        if match:
+            return match.group(1).strip()
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            match = pattern.search(text)
+            if match:
+                return match.group(1).strip()
     return ""
 
 # ---------------------------------------------------------
@@ -290,6 +311,42 @@ async def extract_from_sjuklista(file: UploadFile = File(...)):
                 logger.debug(f"Removed temp file: {tmp_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove temp file {tmp_path}: {e}")
+
+
+@app.post("/extract/time-report-brukare")
+async def extract_time_report_brukare(file: UploadFile = File(...)):
+    filename = file.filename or "unknown.pdf"
+    tmp_path = None
+
+    try:
+        if not filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="File must be a PDF")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            content = await file.read()
+            if not content:
+                raise HTTPException(status_code=400, detail="Empty PDF uploaded")
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        brukare = extract_uppdragsgivare_from_time_report_pdf(tmp_path)
+        if not brukare:
+            return JSONResponse({"status": "error", "error_message": "Uppdragsgivare not found"}, status_code=422)
+
+        return JSONResponse({"status": "ok", "brukare": brukare})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Unexpected error while extracting brukare: {str(e)}"
+        logger.error(error_msg)
+        return JSONResponse({"status": "error", "error_message": error_msg}, status_code=500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------
