@@ -18,22 +18,23 @@ import tempfile
 import shutil
 import logging
 import json
+import zipfile
+import uuid
 from datetime import datetime
-from typing import Dict, Any
 
 # Dynamisk sökväg till payroll-extractor
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 payroll_extractor_path = os.path.join(base_dir, "..", "payroll-extractor")
 sys.path.append(os.path.abspath(payroll_extractor_path))
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Importer från extractor-modulerna
 from extractor.extract_payroll import extract_payroll
 from extractor.extract_payroll_from_list import process_sjuklista
-from extractor.extract_payroll_prepare import split_payrolls_in_pdf
+from extractor.extract_payroll_prepare import split_payrolls_in_pdf, extract_employee_pdfs
 
 # ---------------------------------------------------------
 # Logging och app-inställningar
@@ -124,35 +125,34 @@ async def extract_payroll_endpoint(file: UploadFile = File(...), mode: str = For
             log_api_request("/extract/payroll", filename, "error", error_msg)
             raise HTTPException(status_code=400, detail=error_msg)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        if mode == "multi":
+            # Phase 2: Multi-employee PDF processing
+            # Split PDF into individual payroll blocks and save raw data
             content = await file.read()
             if not content:
                 error_msg = "Empty file uploaded"
                 log_api_request("/extract/payroll", filename, "error", error_msg)
                 raise HTTPException(status_code=400, detail=error_msg)
-            tmp.write(content)
-            tmp_path = tmp.name
 
-        logger.info(f"Processing PDF: {filename} (temp: {tmp_path}) in {mode} mode")
-
-        if mode == "multi":
-            # Phase 2: Multi-employee PDF processing
-            # Split PDF into individual payroll blocks and save raw data
-            result = split_payrolls_in_pdf(tmp_path)
-            payrolls = result["payrolls"]
-            pdf_path = result["pdf_path"]
-
-            # Create the raw data directory structure
-            from datetime import datetime
             now = datetime.now()
             month_dir = now.strftime("%Y_%m")
             raw_dir = os.path.join(payroll_extractor_path, "outbox", "raw", month_dir)
             os.makedirs(raw_dir, exist_ok=True)
+            timestamp = now.strftime("%Y-%m-%d_%H.%M.%S")
+            stable_pdf_path = os.path.join(raw_dir, f"payroll_source_{timestamp}.pdf")
+
+            with open(stable_pdf_path, "wb") as f:
+                f.write(content)
+
+            logger.info(f"Processing PDF: {filename} (stored: {stable_pdf_path}) in {mode} mode")
+
+            result = split_payrolls_in_pdf(stable_pdf_path)
+            payrolls = result["payrolls"]
 
             # Save raw payroll data with PDF path metadata
             raw_file = os.path.join(raw_dir, "payroll_raw.json")
             data_to_save = {
-                "pdf_path": pdf_path,
+                "pdf_path": stable_pdf_path,
                 "payrolls": payrolls
             }
             with open(raw_file, "w", encoding="utf-8") as f:
@@ -166,10 +166,21 @@ async def extract_payroll_endpoint(file: UploadFile = File(...), mode: str = For
                 "mode": "multi",
                 "employee_count": len(payrolls),
                 "raw_file": raw_file,
-                "message": f"Successfully processed {len(payrolls)} employees from PDF"
+                "message": f"Successfully processed {len(payrolls)} employees from PDF",
+                "pdf_path": stable_pdf_path
             }
         else:
             # Single employee PDF processing (original behavior)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                content = await file.read()
+                if not content:
+                    error_msg = "Empty file uploaded"
+                    log_api_request("/extract/payroll", filename, "error", error_msg)
+                    raise HTTPException(status_code=400, detail=error_msg)
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            logger.info(f"Processing PDF: {filename} (temp: {tmp_path}) in {mode} mode")
             result = extract_payroll(tmp_path)
 
             if isinstance(result, dict) and "status" in result and result["status"] == "error":
@@ -259,6 +270,96 @@ async def extract_from_sjuklista(file: UploadFile = File(...)):
                 logger.debug(f"Removed temp file: {tmp_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove temp file {tmp_path}: {e}")
+
+
+# ---------------------------------------------------------
+# Export ZIP package (calculation + payroll PDFs + time reports)
+# ---------------------------------------------------------
+@app.post("/export/zip")
+async def export_zip_package(
+    request: Request,
+    calculation_pdf: UploadFile = File(...),
+    time_report_pdf: UploadFile = File(...),
+    employee_ids: str = Form(...),
+    raw_file: str = Form(...)
+):
+    try:
+        try:
+            employee_list = json.loads(employee_ids)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="employee_ids must be valid JSON")
+
+        if not isinstance(employee_list, list) or not employee_list:
+            raise HTTPException(status_code=400, detail="employee_ids must be a non-empty list")
+
+        if not os.path.exists(raw_file):
+            raise HTTPException(status_code=404, detail="raw_file not found")
+
+        with open(raw_file, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+        pdf_path = raw_data.get("pdf_path") if isinstance(raw_data, dict) else None
+        if not pdf_path or not os.path.exists(pdf_path):
+            raise HTTPException(status_code=404, detail="payroll PDF not found for raw_file")
+
+        zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips")
+        os.makedirs(zip_dir, exist_ok=True)
+        zip_id = uuid.uuid4().hex
+        zip_path = os.path.join(zip_dir, f"zip_{zip_id}.zip")
+        work_dir = os.path.join(zip_dir, f"zip_{zip_id}_work")
+        os.makedirs(work_dir, exist_ok=True)
+
+        payroll_files, missing_employee_ids = extract_employee_pdfs(
+            pdf_path=pdf_path,
+            employee_numbers=employee_list,
+            output_dir=work_dir
+        )
+
+        calc_bytes = await calculation_pdf.read()
+        if not calc_bytes:
+            raise HTTPException(status_code=400, detail="calculation_pdf is empty")
+        time_bytes = await time_report_pdf.read()
+        if not time_bytes:
+            raise HTTPException(status_code=400, detail="time_report_pdf is empty")
+
+        calculation_name = calculation_pdf.filename or "berakning.pdf"
+        time_report_name = time_report_pdf.filename or "tidrapport.pdf"
+
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(calculation_name, calc_bytes)
+            zf.writestr(time_report_name, time_bytes)
+            for anr, file_path in payroll_files.items():
+                zf.write(file_path, arcname=os.path.basename(file_path))
+
+        try:
+            shutil.rmtree(work_dir)
+        except Exception as e:
+            logger.warning(f"Failed to clean zip work dir {work_dir}: {e}")
+
+        download_url = str(request.base_url) + f"download/zip/{zip_id}"
+        return JSONResponse({
+            "status": "ok",
+            "zip_id": zip_id,
+            "download_url": download_url,
+            "missing_employee_ids": missing_employee_ids
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Unexpected error while creating zip: {str(e)}"
+        logger.error(error_msg)
+        return JSONResponse(
+            {"status": "error", "error_message": error_msg},
+            status_code=500
+        )
+
+
+@app.get("/download/zip/{zip_id}")
+async def download_zip(zip_id: str):
+    zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips")
+    zip_path = os.path.join(zip_dir, f"zip_{zip_id}.zip")
+    if not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="zip not found")
+    return FileResponse(zip_path, media_type="application/zip", filename=os.path.basename(zip_path))
 
 
 # ---------------------------------------------------------
