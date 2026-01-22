@@ -429,7 +429,8 @@ async def export_merged_pdf(
         calculation_name = calculation_pdf.filename or "sjukloner.pdf"
         if not calculation_name.lower().endswith(".pdf"):
             calculation_name = f"{calculation_name}.pdf"
-        merged_path = os.path.join(output_dir, calculation_name)
+        merged_filename = re.sub(r"^sjukloner_", "sjukloner-rapport_", calculation_name)
+        merged_path = os.path.join(output_dir, merged_filename)
         work_dir = os.path.join(output_dir, f"merged_{job_id}_work")
         os.makedirs(work_dir, exist_ok=True)
 
@@ -473,7 +474,7 @@ async def export_merged_pdf(
         except Exception as e:
             logger.warning(f"Failed to clean merged work dir {work_dir}: {e}")
 
-        download_url = str(request.base_url) + f"download/merged/{year}/{month}/{calculation_name}"
+        download_url = str(request.base_url) + f"download/merged/{year}/{month}/{merged_filename}"
         return JSONResponse({
             "status": "ok",
             "download_url": download_url,
