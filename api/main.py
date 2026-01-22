@@ -19,9 +19,11 @@ import shutil
 import logging
 import json
 import re
+import io
 import zipfile
 import uuid
 from datetime import datetime
+from pypdf import PdfReader, PdfWriter
 
 # Dynamisk sökväg till payroll-extractor
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -384,6 +386,111 @@ async def export_zip_package(
         )
 
 
+# ---------------------------------------------------------
+# Export merged PDF (calculation + time report + payroll PDFs)
+# ---------------------------------------------------------
+@app.post("/export/merged-pdf")
+async def export_merged_pdf(
+    request: Request,
+    calculation_pdf: UploadFile = File(...),
+    time_report_pdf: UploadFile = File(...),
+    employee_ids: str = Form(...),
+    raw_file: str = Form(...)
+):
+    try:
+        try:
+            employee_list = json.loads(employee_ids)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="employee_ids must be valid JSON")
+
+        if not isinstance(employee_list, list) or not employee_list:
+            raise HTTPException(status_code=400, detail="employee_ids must be a non-empty list")
+
+        if not os.path.exists(raw_file):
+            raise HTTPException(status_code=404, detail="raw_file not found")
+
+        with open(raw_file, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+        pdf_path = raw_data.get("pdf_path") if isinstance(raw_data, dict) else None
+        if not pdf_path or not os.path.exists(pdf_path):
+            raise HTTPException(status_code=404, detail="payroll PDF not found for raw_file")
+
+        payrolls_data = raw_data.get("payrolls") if isinstance(raw_data, dict) else None
+        reporting_period = extract_reporting_period_from_raw(payrolls_data)
+        if reporting_period:
+            year_month = reporting_period.split(" - ")[0][:7]
+        else:
+            year_month = datetime.now().strftime("%Y-%m")
+        year, month = year_month.split("-")
+
+        output_dir = os.path.join(payroll_extractor_path, "outbox", "zips", year, month)
+        os.makedirs(output_dir, exist_ok=True)
+        job_id = uuid.uuid4().hex
+        calculation_name = calculation_pdf.filename or "sjukloner.pdf"
+        if not calculation_name.lower().endswith(".pdf"):
+            calculation_name = f"{calculation_name}.pdf"
+        merged_path = os.path.join(output_dir, calculation_name)
+        work_dir = os.path.join(output_dir, f"merged_{job_id}_work")
+        os.makedirs(work_dir, exist_ok=True)
+
+        payroll_files, missing_employee_ids = extract_employee_pdfs(
+            pdf_path=pdf_path,
+            employee_numbers=employee_list,
+            output_dir=work_dir
+        )
+
+        calc_bytes = await calculation_pdf.read()
+        if not calc_bytes:
+            raise HTTPException(status_code=400, detail="calculation_pdf is empty")
+        time_bytes = await time_report_pdf.read()
+        if not time_bytes:
+            raise HTTPException(status_code=400, detail="time_report_pdf is empty")
+
+        writer = PdfWriter()
+
+        def append_pdf_bytes(data: bytes):
+            reader = PdfReader(io.BytesIO(data))
+            for page in reader.pages:
+                writer.add_page(page)
+
+        append_pdf_bytes(calc_bytes)
+        append_pdf_bytes(time_bytes)
+
+        for anr in employee_list:
+            file_path = payroll_files.get(str(anr))
+            if not file_path:
+                continue
+            with open(file_path, "rb") as f:
+                reader = PdfReader(f)
+                for page in reader.pages:
+                    writer.add_page(page)
+
+        with open(merged_path, "wb") as f:
+            writer.write(f)
+
+        try:
+            shutil.rmtree(work_dir)
+        except Exception as e:
+            logger.warning(f"Failed to clean merged work dir {work_dir}: {e}")
+
+        download_url = str(request.base_url) + f"download/merged/{year}/{month}/{calculation_name}"
+        return JSONResponse({
+            "status": "ok",
+            "download_url": download_url,
+            "missing_employee_ids": missing_employee_ids,
+            "reporting_period": reporting_period or None
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Unexpected error while creating merged PDF: {str(e)}"
+        logger.error(error_msg)
+        return JSONResponse(
+            {"status": "error", "error_message": error_msg},
+            status_code=500
+        )
+
+
 @app.get("/download/zip/{year}/{month}/{filename}")
 async def download_zip_by_path(year: str, month: str, filename: str):
     zip_dir = os.path.join(payroll_extractor_path, "outbox", "zips", year, month)
@@ -391,6 +498,15 @@ async def download_zip_by_path(year: str, month: str, filename: str):
     if not os.path.exists(zip_path):
         raise HTTPException(status_code=404, detail="zip not found")
     return FileResponse(zip_path, media_type="application/zip", filename=os.path.basename(zip_path))
+
+
+@app.get("/download/merged/{year}/{month}/{filename}")
+async def download_merged_pdf(year: str, month: str, filename: str):
+    output_dir = os.path.join(payroll_extractor_path, "outbox", "zips", year, month)
+    file_path = os.path.join(output_dir, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="merged pdf not found")
+    return FileResponse(file_path, media_type="application/pdf", filename=os.path.basename(file_path))
 
 
 @app.get("/download/zip/{zip_id}")
