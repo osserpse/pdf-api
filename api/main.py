@@ -19,6 +19,7 @@ import shutil
 import logging
 import json
 import re
+import unicodedata
 import io
 import zipfile
 import uuid
@@ -119,23 +120,58 @@ def extract_reporting_period_from_raw(payrolls: Dict[str, Any]) -> str:
     return ""
 
 
+def _clean_uppdragsgivare_text(value: str) -> str:
+    """
+    Keep Unicode letters plus spaces/hyphens; normalize whitespace.
+    """
+    cleaned_chars = []
+    for ch in value:
+        if unicodedata.category(ch).startswith("L"):
+            cleaned_chars.append(ch)
+        elif ch in (" ", "-"):
+            cleaned_chars.append(ch)
+        else:
+            cleaned_chars.append(" ")
+
+    cleaned = "".join(cleaned_chars)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s*-\s*", "-", cleaned)
+    return cleaned
+
+
+def _extract_uppdragsgivare_from_text(text: str) -> str:
+    for line in text.splitlines():
+        if "Uppdragsgivare" in line:
+            parts = line.split(":", 1)
+            if len(parts) > 1:
+                cleaned = _clean_uppdragsgivare_text(parts[1].strip())
+                if cleaned:
+                    return cleaned
+    match = re.search(r"Uppdragsgivare\s*:\s*(.+)", text, re.IGNORECASE)
+    if match:
+        candidate = match.group(1).splitlines()[0].strip()
+        cleaned = _clean_uppdragsgivare_text(candidate)
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def extract_uppdragsgivare_from_time_report_pdf(pdf_path: str) -> str:
     """
     Extract 'Uppdragsgivare:' from the last page; fallback to all pages.
     """
-    pattern = re.compile(r"Uppdragsgivare\s*:\s*([A-Za-zÅÄÖåäö\s\-]+)", re.IGNORECASE)
     with pdfplumber.open(pdf_path) as pdf:
         if len(pdf.pages) == 0:
             return ""
         last_text = pdf.pages[-1].extract_text() or ""
-        match = pattern.search(last_text)
-        if match:
-            return match.group(1).strip()
+        result = _extract_uppdragsgivare_from_text(last_text)
+        if result:
+            return result
         for page in pdf.pages:
             text = page.extract_text() or ""
-            match = pattern.search(text)
-            if match:
-                return match.group(1).strip()
+            result = _extract_uppdragsgivare_from_text(text)
+            if result:
+                return result
     return ""
 
 # ---------------------------------------------------------
